@@ -1,0 +1,13 @@
+#!/bin/bash
+
+echo "none to see here"
+
+sleep 5
+
+echo "none to see here"
+
+sleep 5
+
+echo "i saw the fnords"
+
+while true; do sleep 10; done

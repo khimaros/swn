@@ -1,0 +1,98 @@
+#!/bin/bash
+
+set -euo pipefail
+
+stderr() {
+        echo "$@" >&2
+}
+
+if [[ -z "$*" ]]; then
+        stderr "must specify command to run as arguments"
+        stderr "exiting due to configuration issue"
+        exit 1
+fi
+
+SERVICE=("$@")
+
+SWN_DRYRUN=${SWN_DRYRUN:=""}
+
+if [[ -z "${SWN_CHECK_COMMAND:=}" ]]; then
+        stderr "SWN_CHECK_COMMAND must be set in the environment"
+        stderr "exiting due to configuration issue"
+        exit 1
+elif [[ -z "${SWN_DRYRUN}" ]] && [[ -z "${NOTIFY_SOCKET:=}" ]]; then
+        stderr "NOTIFY_SOCKET is not set in the environment"
+	stderr "ensure that Type=notify in the systemd service"
+        stderr "exiting due to configuration issue"
+        exit 1
+elif [[ -z "${WATCHDOG_USEC:=}" ]]; then
+        stderr "WATCHDOG_USEC is not set in the environment"
+	stderr "ensure that WatchdogSec is set in the systemd service"
+        stderr "exiting due to configuration issue"
+        exit 1
+fi
+
+stderr "starting watchdog for service (${SERVICE[*]})"
+
+SWN_WATCH_CHECKER=${SWN_WATCH_CHECKER:="false"}
+
+SWN_CHECK_TIMEOUT=$(( WATCHDOG_USEC / 1000000 - 2 ))
+
+stderr "NOTIFY_SOCKET : ${NOTIFY_SOCKET:=}"
+stderr "WATCHDOG_USEC : ${WATCHDOG_USEC}"
+stderr "SWN_CHECK_TIMEOUT : ${SWN_CHECK_TIMEOUT}"
+stderr "SWN_CHECK_COMMAND : ${SWN_CHECK_COMMAND}"
+stderr "SWN_WATCH_CHECKER : ${SWN_WATCH_CHECKER}"
+stderr "SWN_DRYRUN : ${SWN_DRYRUN}"
+
+maybe_notify() {
+	if [[ -z "${SWN_DRYRUN}" ]]; then
+		systemd-notify "$@"
+	else
+		stderr "+ systemd-notify $*"
+	fi
+}
+
+check_forever() {
+        READY=0
+        while true; do
+                stderr "executing check command"
+                "${SWN_CHECK_COMMAND}" && CHECK_RESULT=$? || CHECK_RESULT=$?
+                stderr "check command exited with status ${CHECK_RESULT}"
+
+                if ! kill -0 ${SERVICE_PID} &>/dev/null; then
+                        stderr "service is not running, exiting"
+                        exit 1
+                fi
+
+                if ! (( CHECK_RESULT )); then
+                        if (( ! READY )); then
+                                READY=1
+                                stderr "notifying systemd to signal readiness"
+                                maybe_notify --ready
+                        fi
+
+                        stderr "notifying systemd to signal health"
+                        maybe_notify WATCHDOG=1
+                else
+                        stderr "service check failed, waiting..."
+                fi
+
+                stderr "sleeping for ${SWN_CHECK_TIMEOUT} seconds"
+                sleep ${SWN_CHECK_TIMEOUT}
+        done
+}
+
+stderr "starting service as a background process"
+WATCHDOG_USEC="" "${SERVICE[@]}" &
+SERVICE_PID=$!
+
+sleep 1
+
+if [[ "${SWN_WATCH_CHECKER}" == "true" ]]; then
+        stderr "delegating watch responsibility to check command"
+        SWN_CHECK_TIMEOUT=${SWN_CHECK_TIMEOUT} exec ${SWN_CHECK_COMMAND}
+else
+        stderr "entering stateless command check loop"
+        check_forever
+fi

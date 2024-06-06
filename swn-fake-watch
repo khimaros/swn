@@ -1,0 +1,39 @@
+#!/bin/bash
+
+set -euo pipefail
+
+stderr() {
+        echo "$@" >&2
+}
+
+if [[ -z "${SWN_CHECK_TIMEOUT:=}" ]]; then
+        stderr "SWN_CHECK_TIMEOUT must be set in the environment"
+        stderr "exiting due to configuration issue"
+        exit 1
+fi
+
+SWN_DRYRUN=${SWN_DRYRUN:=""}
+
+stderr "initialized check service"
+stderr "SWN_CHECK_TIMEOUT : ${SWN_CHECK_TIMEOUT}"
+stderr "SWN_DRYRUN : ${SWN_DRYRUN}"
+
+maybe_notify() {
+        if [[ -z "${SWN_DRYRUN}" ]]; then
+                systemd-notify "$@"
+        else
+                stderr "+ systemd-notify $*"
+        fi
+}
+
+maybe_notify --ready
+
+sleep ${SWN_CHECK_TIMEOUT}
+
+maybe_notify WATCHDOG=1
+
+sleep ${SWN_CHECK_TIMEOUT}
+
+maybe_notify WATCHDOG=1
+
+sleep 100

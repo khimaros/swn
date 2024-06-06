@@ -1,0 +1,62 @@
+#!/bin/bash
+
+set -euo pipefail
+
+stderr() {
+        echo "$@" >&2
+}
+
+if [[ -z "${SWN_WATCH_SERVICE:=}" ]] && [[ -z "${SWN_WATCH_COMMAND:=}" ]]; then
+        stderr "SWN_WATCH_SERVICE or SWN_WATCH_COMMAND must be set in the environment"
+        stderr "exiting due to configuration issue"
+        exit 1
+elif [[ -z "${SWN_WATCH_PATTERN:=}" ]]; then
+        stderr "SWN_WATCH_PATTERN must be set in the environment"
+        stderr "exiting due to configuration issue"
+        exit 1
+elif [[ -z "${SWN_CHECK_TIMEOUT:=}" ]]; then
+        stderr "SWN_CHECK_TIMEOUT must be set in the environment"
+        stderr "exiting due to configuration issue"
+        exit 1
+fi
+
+SWN_DRYRUN=${SWN_DRYRUN:=""}
+
+SWN_WATCH_COMMAND=${SWN_WATCH_COMMAND:="journalctl -u ${SWN_WATCH_SERVICE} -n 0 -f"}
+
+stderr "initialized check service"
+stderr "SWN_WATCH_SERVICE : ${SWN_WATCH_SERVICE}"
+stderr "SWN_WATCH_PATTERN : ${SWN_WATCH_PATTERN}"
+stderr "SWN_WATCH_COMMAND : ${SWN_WATCH_COMMAND}"
+stderr "SWN_CHECK_TIMEOUT : ${SWN_CHECK_TIMEOUT}"
+stderr "SWN_DRYRUN : ${SWN_DRYRUN}"
+
+maybe_notify() {
+        if [[ -z "${SWN_DRYRUN}" ]]; then
+                systemd-notify "$@"
+        else
+                stderr "+ systemd-notify $*"
+        fi
+}
+
+LAST_NOTIFY=$(date "+%s")
+while true; do
+        if read -t 0; then
+                read -r line
+                if [[ "$line" =~ ${SWN_WATCH_PATTERN} ]]; then
+                        stderr "found matching log entry: ${line}"
+                        stderr "exiting to trigger service restart"
+                        exit 1
+                fi
+        fi
+
+        now=$(date "+%s")
+        elapsed=$(( now - LAST_NOTIFY ))
+        if (( elapsed >= SWN_CHECK_TIMEOUT )); then
+                #stderr "notifying systemd to signal health"
+                maybe_notify WATCHDOG=1
+                LAST_NOTIFY=$(date "+%s")
+        fi
+
+        sleep 1
+done < <(${SWN_WATCH_COMMAND})
